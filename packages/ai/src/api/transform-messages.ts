@@ -13,7 +13,7 @@ const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not suppor
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 const ERROR_TOOL_IMAGE_PLACEHOLDER = "(image attached after the tool results)";
 
-/** An error tool result split into a text-only result and the images to send after the tool results. */
+/** A tool result split into a text-only result and the images to send after the tool results. */
 export interface SplitErrorToolResult {
 	/** The result content with each run of images replaced by a note. */
 	content: TextContent[];
@@ -29,12 +29,20 @@ export interface SplitErrorToolResult {
  * that need no split (#10794).
  */
 export function splitErrorToolResultImages(msg: ToolResultMessage): SplitErrorToolResult | undefined {
-	if (!msg.isError) return undefined;
+	return msg.isError ? splitToolResultImages(msg) : undefined;
+}
+
+/**
+ * Split the images out of any tool result, for models that reject images nested in tool results
+ * (on Bedrock, every image-capable family except Claude and Nova, #8643). Send the parts as for
+ * splitErrorToolResultImages. Returns undefined for results without images.
+ */
+export function splitToolResultImages(msg: ToolResultMessage): SplitErrorToolResult | undefined {
 	const images = msg.content.filter((block): block is ImageContent => block.type === "image");
 	if (images.length === 0) return undefined;
 	return {
 		content: replaceImagesWithPlaceholder(msg.content, ERROR_TOOL_IMAGE_PLACEHOLDER),
-		caption: `Images from the error result of tool call ${msg.toolCallId} (${msg.toolName}):`,
+		caption: `Images from the ${msg.isError ? "error " : ""}result of tool call ${msg.toolCallId} (${msg.toolName}):`,
 		images,
 	};
 }

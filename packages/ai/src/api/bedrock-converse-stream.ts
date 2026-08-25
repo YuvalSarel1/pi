@@ -71,7 +71,7 @@ import {
 	clampMaxTokensToContext,
 	clampReasoning,
 } from "./simple-options.ts";
-import { splitErrorToolResultImages, transformMessages } from "./transform-messages.ts";
+import { splitErrorToolResultImages, splitToolResultImages, transformMessages } from "./transform-messages.ts";
 
 export type BedrockThinkingDisplay = "summarized" | "omitted";
 
@@ -966,6 +966,10 @@ function sanitizeBedrockDocument(value: JsonValue): DocumentType {
 	return value;
 }
 
+function isAmazonNovaModel(model: Model<"bedrock-converse-stream">): boolean {
+	return getModelMatchCandidates(model.id, model.name).some((s) => s.includes("amazon-nova") || s.includes("nova-"));
+}
+
 function convertToolResultContent(content: (TextContent | ImageContent)[]): ToolResultContentBlock[] {
 	const result: ToolResultContentBlock[] = [];
 	for (const c of content) {
@@ -1102,12 +1106,17 @@ function convertMessages(
 				// Bedrock requires all tool results to be in one message
 				const toolResults: ContentBlock[] = [];
 				// Claude rejects error tool results that contain anything but text, so for Claude their
-				// images follow all tool results of the turn (#10794). Other models keep them in place.
-				const errorImages: ContentBlock[] = [];
+				// images follow all tool results of the turn (#10794). Bedrock accepts images nested in
+				// tool results only for Claude and Nova, so other models get every image moved there (#8643).
+				const movedImages: ContentBlock[] = [];
 				let j = i;
 				while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 					const toolMsg = transformedMessages[j] as ToolResultMessage;
-					const split = isAnthropicClaudeModel(model) ? splitErrorToolResultImages(toolMsg) : undefined;
+					const split = isAnthropicClaudeModel(model)
+						? splitErrorToolResultImages(toolMsg)
+						: isAmazonNovaModel(model)
+							? undefined
+							: splitToolResultImages(toolMsg);
 					toolResults.push({
 						toolResult: {
 							toolUseId: toolMsg.toolCallId,
@@ -1116,7 +1125,7 @@ function convertMessages(
 						},
 					});
 					if (split) {
-						errorImages.push(
+						movedImages.push(
 							{ text: split.caption },
 							...split.images.map((image) => ({ image: createImageBlock(image.mimeType, image.data) })),
 						);
@@ -1127,7 +1136,7 @@ function convertMessages(
 				// Skip the messages we've already processed
 				i = j - 1;
 
-				result.push({ role: ConversationRole.USER, content: [...toolResults, ...errorImages] });
+				result.push({ role: ConversationRole.USER, content: [...toolResults, ...movedImages] });
 				break;
 			}
 			default:
